@@ -10,7 +10,6 @@ from ema_pytorch import EMA
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from ..data import get_loader
-from ..models import get_model_cls
 from ..muon import init_muon
 from ..utils import Timer, freeze, unfreeze
 from ..utils.logging import LogHelper, to_wandb
@@ -38,10 +37,17 @@ class CycleGANTrainer(BaseTrainer):
 
         self.d_A = Discriminator(self.model_cfg)
         self.d_B = Discriminator(self.model_cfg)
-
         if self.rank == 0:
-            param_count = sum(p.numel() for p in self.model.parameters())
-            print(f"Total parameters: {param_count:,}")
+            g_A2B_params = sum(p.numel() for p in self.g_A2B.parameters())
+            g_B2A_params = sum(p.numel() for p in self.g_B2A.parameters())
+            d_A_params = sum(p.numel() for p in self.d_A.parameters())
+            d_B_params = sum(p.numel() for p in self.d_B.parameters())
+            total_params = g_A2B_params + g_B2A_params + d_A_params + d_B_params
+            print(f"Generator A->B parameters: {g_A2B_params:,}")
+            print(f"Generator B->A parameters: {g_B2A_params:,}")
+            print(f"Discriminator A parameters: {d_A_params:,}")
+            print(f"Discriminator B parameters: {d_B_params:,}")
+            print(f"Total parameters: {total_params:,}")
 
         self.ema_A2B = None
         self.ema_B2A = None
@@ -173,8 +179,6 @@ class CycleGANTrainer(BaseTrainer):
         timer = Timer()
         timer.reset()
         metrics = LogHelper()
-        if self.rank == 0:
-            wandb.watch(self.get_module(), log = 'all')
 
         # Dataset setup
         loader_A = get_loader(self.train_cfg.data_id_A, self.train_cfg.batch_size, **self.train_cfg.data_kwargs_A)
@@ -187,8 +191,9 @@ class CycleGANTrainer(BaseTrainer):
             real = aug(real)
             fake = aug(fake)
 
-            fake_out = d(fake.detach())
-            real_out = d(real.detach())
+            x = torch.cat([real.detach(), fake.detach()], dim=0)
+            out = d(x)
+            real_out, fake_out = out.chunk(2, dim=0)
 
             fake_loss = F.relu(1 + fake_out).mean()
             real_loss = F.relu(1 - real_out).mean()
@@ -318,18 +323,18 @@ class CycleGANTrainer(BaseTrainer):
                             with ctx:
                                 # A -> B samples
                                 ema_A2B_core = get_ema_core_A2B()
-                                gen_B = ema_A2B_core(batch_A)
+                                gen_B = ema_A2B_core(real_A)
                                 wandb_dict['a2b_samples'] = to_wandb(
-                                    batch_A.detach().contiguous().bfloat16(),
+                                    real_A.detach().contiguous().bfloat16(),
                                     gen_B.detach().contiguous().bfloat16(),
                                     gather=True
                                 )
 
                                 # B -> A samples
                                 ema_B2A_core = get_ema_core_B2A()
-                                gen_A = ema_B2A_core(batch_B)
+                                gen_A = ema_B2A_core(real_B)
                                 wandb_dict['b2a_samples'] = to_wandb(
-                                    batch_B.detach().contiguous().bfloat16(),
+                                    real_B.detach().contiguous().bfloat16(),
                                     gen_A.detach().contiguous().bfloat16(),
                                     gather=True
                                 )

@@ -6,98 +6,51 @@ from ..nn.resnet import UpBlock, DownBlock, SameBlock
 from ..configs import ResNetConfig
 from ..nn.augs import PairedRandomAffine
 
-class Encoder(nn.Module):
+class Generator(nn.Module):
     def __init__(self, config : ResNetConfig):
         super().__init__()
 
-        size = config.sample_size
-        latent_size = config.latent_size
-        ch_0 = config.ch_0
-        ch_max = config.ch_max
-
-        self.conv_in = nn.Conv2d(3, ch_0, 1, 1, 0, bias = False)
-
-        blocks = []
-        ch = ch_0
-
-        blocks_per_stage = config.encoder_blocks_per_stage
-        total_blocks = len(blocks_per_stage)
-
-        for block_count in blocks_per_stage[:-1]:
-            next_ch = min(ch*2, ch_max)
-            blocks.append(DownBlock(ch, next_ch, block_count, total_blocks))
-            size = size // 2
-            ch = next_ch
-
-        self.blocks = nn.ModuleList(blocks)
+        self.conv_in = nn.Conv2d(3, 64, 1, 1, 0, bias = False)
+        self.blocks = nn.Sequential(
+            DownBlock(64,128,1,10),
+            DownBlock(128,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            SameBlock(256,256,1,10),
+            UpBlock(256,128,1,10),
+            UpBlock(128,64,1,10)
+        )
+        self.conv_out = nn.Conv2d(64,3,1,1,0,bias=False)
 
     def forward(self, x):
         x = self.conv_in(x)
-
-        for block in self.blocks:
-            x = block(x)
+        x = self.blocks(x)
+        x = self.conv_out(x)
 
         return x
     
-class Decoder(nn.Module):
-    def __init__(self, config : ResNetConfig):
-        super().__init__()
-
-        size = config.sample_size
-        latent_size = config.latent_size
-        ch_0 = config.ch_0
-        ch_max = config.ch_max
-
-        blocks = []
-        ch = ch_max
-
-        blocks_per_stage = config.decoder_blocks_per_stage
-        total_blocks = len(blocks_per_stage)
-
-        for block_count in reversed(blocks_per_stage[:-1]):
-            next_ch = max(ch//2, ch_0)
-            blocks.append(UpBlock(ch, next_ch, block_count, total_blocks))
-            ch = next_ch
-
-        self.blocks = nn.ModuleList(blocks)
-        self.conv_out = nn.Conv2d(ch_0, 3, 1, 1, 0, bias=False)
-
-    def forward(self, x):
-        for block in self.blocks:
-            x = block(x)
-
-        x = self.conv_out(x)
-        return x
-
 class Discriminator(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.encoder = Encoder(config)
-        self.conv_out = nn.Conv2d(config.ch_max,config.ch_max,4,1,0,bias=False)
-        self.head = nn.Linear(config.ch_max, 1, bias = False)
-        self.aug = PairedRandomAffine()
+        self.conv_in = nn.Conv2d(3,64,1,1,0,bias=False)
+        self.encoder = nn.Sequential(
+            DownBlock(64,128,1,10),
+            DownBlock(128,256,1,10),
+            DownBlock(256,256,1,10),
+            DownBlock(256,256,1,10)
+        )
+        self.conv_out = nn.Conv2d(256,1,1,1,0,bias=False)
 
     def forward(self, x):
+        x = self.conv_in(x)
         x = self.encoder(x)
         x = self.conv_out(x)
-        x = x.flatten(1)
-        x = self.head(x)
-        return x
-    
-class Generator(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        self.encoder = Encoder(config)
-        blocks_per_stage = config.encoder_blocks_per_stage
-        self.mid = SameBlock(config.ch_max, config.ch_max, blocks_per_stage[-1], len(blocks_per_stage))
-        self.decoder = Decoder(config)
-    
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.mid(x)
-        x = self.decoder(x)
+        x = x.mean([2,3])
         return x
 
 if __name__ == "__main__":

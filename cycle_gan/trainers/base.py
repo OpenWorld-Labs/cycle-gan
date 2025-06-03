@@ -37,18 +37,6 @@ class BaseTrainer:
         if self.world_size > 1:
             dist.barrier()
 
-    def get_module(self, ema = False):
-        if self.world_size == 1:
-            if ema:
-                return self.ema.ema_model
-            else:
-                return self.model
-        else:
-            if ema:
-                return self.ema.ema_model.module
-            else:
-                return self.model.module
-
     def save(self, save_dict):
         os.makedirs(self.train_cfg.checkpoint_dir, exist_ok = True)
         fp = os.path.join(self.train_cfg.checkpoint_dir, f"step_{self.total_step_counter}.pt")
